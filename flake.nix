@@ -72,6 +72,13 @@
               # tf-keras 2.17 in legacy mode satisfies the API. csbdeep also
               # honours TF_USE_LEGACY_KERAS when picking its keras backend.
               export TF_USE_LEGACY_KERAS=1
+              # PYTHONSAFEPATH=1 (Python 3.11+) prevents Python from prepending
+              # the script's directory to sys.path. Without it, the upstream
+              # `stardist/` source tree at ${self}/stardist shadows the nix-
+              # built compiled package and `stardist.lib.stardist2d` (the C
+              # extension) is reported missing — same source-shadow trap that
+              # the importlib guard handles in basic_test.py.
+              export PYTHONSAFEPATH=1
               ${python_with_pkgs}/bin/python ${self}/server.py ''${@:-"ipc:///tmp/stardist.ipc"}
             '';
           in
