@@ -132,7 +132,11 @@
               ];
               shellHook = ''
                 export TF_USE_LEGACY_KERAS=1
-                export PYTHONPATH=${python_with_pkgs}/${python_with_pkgs.sitePackages}:$PYTHONPATH
+                # PYTHONSAFEPATH=1 (Python 3.11+) prevents Python from
+                # prepending the script's directory to sys.path. Keeps
+                # `python basic_test.py` from picking up the in-tree
+                # `stardist/` source tree instead of the nix-built package.
+                export PYTHONSAFEPATH=1
               '';
             };
         };
