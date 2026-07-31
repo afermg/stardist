@@ -44,7 +44,7 @@ address = sys.argv[1]
 
 def setup(
     model_name: str = "2D_versatile_fluo",
-    device: int | None = 0,
+    device: int | str | None = None,
     expected_tile_size: int = 16,
     expected_channels: int = 1,
     prob_thresh: float | None = None,
@@ -57,9 +57,9 @@ def setup(
     model_name : str
         One of the pretrained 2D StarDist models (e.g. ``2D_versatile_fluo``,
         ``2D_versatile_he``, ``2D_paper_dsb2018``, ``2D_demo``).
-    device : int | None
-        CUDA device index. None defaults to 0. TensorFlow will fall back to
-        CPU if no GPU is visible.
+    device : int | str | None
+        CUDA device index or TensorFlow device string. ``None`` selects GPU:0
+        when visible and otherwise CPU.
     expected_tile_size : int
         Required divisor for the trailing spatial dims of incoming arrays.
     expected_channels : int
@@ -69,23 +69,39 @@ def setup(
         Optional overrides for ``predict_instances`` thresholds. ``None``
         means use the model's calibrated defaults.
     """
-    # Bind to a specific GPU when requested. Must happen before any TF op
-    # actually allocates memory.
+    # Bind to a specific GPU when requested. This must happen before a TF op
+    # initializes the runtime.
     gpus = tf.config.list_physical_devices("GPU")
-    if gpus and device is not None:
-        try:
-            tf.config.set_visible_devices([gpus[int(device)]], "GPU")
-            for gpu in tf.config.list_physical_devices("GPU"):
-                tf.config.experimental.set_memory_growth(gpu, True)
-        except (RuntimeError, IndexError):
-            # set_visible_devices fails if TF is already initialized; ignore.
-            pass
+    if device is None:
+        requested_gpu = 0 if gpus else None
+    elif isinstance(device, int):
+        requested_gpu = device
+    else:
+        normalized = device.lower().replace("/", "")
+        if normalized in {"cpu", "cpu:0"}:
+            requested_gpu = None
+        elif normalized.startswith(("cuda:", "gpu:")):
+            requested_gpu = int(normalized.split(":", maxsplit=1)[1])
+        else:
+            raise ValueError(f"Unsupported device {device!r}")
+
+    if requested_gpu is not None:
+        if not gpus:
+            raise RuntimeError(
+                f"GPU:{requested_gpu} was requested but TensorFlow sees no GPU"
+            )
+        if requested_gpu >= len(gpus):
+            raise ValueError(
+                f"device={requested_gpu} out of range; {len(gpus)} GPU(s) visible"
+            )
+        tf.config.set_visible_devices([gpus[requested_gpu]], "GPU")
+        tf.config.experimental.set_memory_growth(gpus[requested_gpu], True)
+        device_str = f"GPU:{requested_gpu}"
+    else:
+        tf.config.set_visible_devices([], "GPU")
+        device_str = "CPU:0"
 
     model = StarDist2D.from_pretrained(model_name)
-
-    # Re-query after possibly restricting visibility.
-    visible_gpus = tf.config.get_visible_devices("GPU")
-    device_str = f"GPU:{device}" if visible_gpus else "CPU:0"
 
     info = {
         "device": device_str,
@@ -122,9 +138,7 @@ def process(
     an instance label map with a leading batch axis: shape ``(N, H, W)``.
     """
     if pixels.ndim != 5:
-        raise ValueError(
-            f"Expected NCZYX (5D) array, got shape {pixels.shape}"
-        )
+        raise ValueError(f"Expected NCZYX (5D) array, got shape {pixels.shape}")
     n, _, z, *input_yx = pixels.shape
     validate_input_shape(input_yx, expected_tile_size)
 
@@ -149,9 +163,7 @@ def process(
             img2d = numpy.transpose(img, (1, 2, 0))
             axes = "YXC"
 
-        labels, _details = model.predict_instances(
-            img2d, axes=axes, **predict_kwargs
-        )
+        labels, _details = model.predict_instances(img2d, axes=axes, **predict_kwargs)
         labels_per_image.append(labels.astype(numpy.int32))
 
     return numpy.stack(labels_per_image, axis=0)
